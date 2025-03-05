@@ -1,0 +1,21 @@
+# Django — основной фреймворк (LTS-версия 4.2.x)
+Django==4.2.5
+
+# Драйвер PostgreSQL
+psycopg2-binary==2.9.7
+
+# Удобная работа с .env-файлами в Django
+django-environ==0.10.0
+
+# Планировщик / фоновые задачи (если хотите использовать Celery)
+celery==5.3.1
+redis==4.6.0
+
+# HTTP-запросы к внешним сервисам (WhatsApp API, и т.д.)
+requests==2.31.0
+
+# Telegram-бот (популярная синхронная библиотека)
+python-telegram-bot==20.3
+
+# Работа с Google API (Docs, Sheets, Drive и т.п.), если нужно
+google-api-python-client==2.94.0
