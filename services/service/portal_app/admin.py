@@ -1,6 +1,8 @@
 from django.contrib import admin
 
-from .models import User, Linked 
+from .models import User, Linked, AuthUser
+from .forms import AuthUserForm
+
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
@@ -12,3 +14,20 @@ class UserAdmin(admin.ModelAdmin):
 class LinkedAdmin(admin.ModelAdmin):
     list_display = ('id', 'telegram_id', 't_number', 'iin', 'created_at')
     search_fields = ('telegram_id', 't_number', 'iin')
+    
+@admin.register(AuthUser)
+class AuthUserAdmin(admin.ModelAdmin):
+    form = AuthUserForm
+    list_display = ("id", "user", "password_hash")
+    readonly_fields = ("password_hash",)
+
+    def save_model(self, request, obj, form, change):
+        """
+        Вызывается при сохранении записи в админке.
+        form.cleaned_data уже содержит новое password_hash (из clean()).
+        """
+        # Берём password_hash из cleaned_data
+        new_hash = form.cleaned_data.get("password_hash")
+        if new_hash:
+            obj.password_hash = new_hash
+        super().save_model(request, obj, form, change)
