@@ -1,81 +1,87 @@
 from django.core.management.base import BaseCommand
-# from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ApplicationBuilder, MessageHandler, filters,
     ContextTypes, ConversationHandler
 )
-#  BOT_TOKEN = "7890144483:AAHWAPus2UIfOO1o9OV3lblkz6ffbDAbXqU"  
 from telegram import Update, ReplyKeyboardMarkup
-from portal_app.models import User, Linked, AuthUser
-from .google_service import get_drive_files
 from asgiref.sync import sync_to_async
-from django.contrib.auth.hashers import check_password 
-from creds import cred
+from django.contrib.auth.hashers import check_password
 
+from portal_app.models import User, AuthUser, Linked
+from portal_app.creds.cred import botTOKEN
+# Импортируем новые функции из google_service
+from .google_service import (
+    get_drive_files_with_links,
+    get_salary_by_iin,
+    make_short_name_no_dots_for_user,      # новая функция, использующая user_obj.name и user_obj.first_name
+    get_vacation_by_user_and_job             # новая функция для поиска отпуска по user_obj и должности
+)
+
+# Состояния для Авторизация
 WAITING_USERNAME = 1
 WAITING_PASSWORD = 2
+
+# Состояния для Отпуск
+WAITING_JOB = 50
+
 AUTHORIZED_USERS = set()
 
 UNAUTHORIZED_KEYBOARD = ReplyKeyboardMarkup(
-    [["/help", "/login"]],
+    [["Помощь", "Авторизация"]],
     resize_keyboard=True
 )
 
 AUTHORIZED_KEYBOARD = ReplyKeyboardMarkup(
     [
-        ["/help", "/bind", "/vacation"],
-        ["/salary", "/list_docs"]
+        ["Помощь", "Привязать", "Отпуск"],
+        ["Зарплата", "Документы"]
     ],
     resize_keyboard=True
 )
 
 @sync_to_async
-def find_user_by_name(name: str) -> User|None:
+def find_user_by_name(name: str) -> User | None:
     return User.objects.filter(name=name).first()
 
 @sync_to_async
-def find_auth_user_by_user(user: User) -> AuthUser|None:
+def find_auth_user_by_user(user: User) -> AuthUser | None:
     return AuthUser.objects.filter(user=user).first()
 
 @sync_to_async
 def save_user(user: User):
     user.save()
 
+@sync_to_async
+def log_to_linked(tg_id, iin, t_number):
+    Linked.objects.create(
+        telegram_id=tg_id,
+        iin=iin or "",
+        t_number=t_number or ""
+    )
+
+@sync_to_async
+def find_user_by_telegram_id(tg_id: int) -> User | None:
+    return User.objects.filter(telegram_id=tg_id).first()
+
+@sync_to_async
+def get_salary_async(iin: str):
+    return get_salary_by_iin(iin)
+
+# Обёртка для новой функции поиска отпуска, принимающая объект пользователя и должность
+@sync_to_async
+def get_vacation_async(user_obj, job: str):
+    return get_vacation_by_user_and_job(user_obj, job)
+
 class Command(BaseCommand):
-    help = "Bot with login + hiding commands until authorized"
+    help = "Bot with text-based commands (Russian) and hidden logic until authorized"
 
     def handle(self, *args, **options):
-        # BOT_TOKEN = "7890144483:AAHWAPus2UIfOO1o9OV3lblkz6ffbDAbXqU"  # вставьте свой токен
-        BOT_TOKEN = cred.BOT_TOKEN
+        BOT_TOKEN = botTOKEN
         app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-        async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            await update.message.reply_text(
-                "Привет! Сначала авторизуйтесь: /login",
-                reply_markup=UNAUTHORIZED_KEYBOARD
-            )
-
-        async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if update.effective_user.id in AUTHORIZED_USERS:
-                text = (
-                    "Доступные команды:\n"
-                    "/help — список команд\n"
-                    "/bind <username> — привязать Telegram к сотруднику\n"
-                    "/vacation — посмотреть отпуска\n"
-                    "/salary — посмотреть зарплату\n"
-                    "/list_docs — список файлов из Google Drive\n"
-                )
-            else:
-                text = (
-                    "Доступные команды:\n"
-                    "/help — эта подсказка\n"
-                    "/login — авторизация\n"
-                )
-            await update.message.reply_text(text)
-
-        async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            """Начинаем диалог логина"""
-            await update.message.reply_text("Введите логин (User.name):")
+        # ---------- ConversationHandler для Авторизация ----------
+        async def start_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            await update.message.reply_text("Введите логин:")
             return WAITING_USERNAME
 
         async def username_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,31 +94,32 @@ class Command(BaseCommand):
             username = context.user_data.get("pending_username")
             raw_password = update.message.text.strip()
 
-            # 1. Находим User по name
             user_obj = await find_user_by_name(username)
             if not user_obj:
                 await update.message.reply_text(
-                    "Пользователь не найден. Повторите /login.",
+                    "Пользователь не найден. Нажмите 'Авторизация' снова.",
                     reply_markup=UNAUTHORIZED_KEYBOARD
                 )
                 return ConversationHandler.END
 
-            # 2. Находим AuthUser
             auth_user = await find_auth_user_by_user(user_obj)
             if not auth_user:
                 await update.message.reply_text(
-                    "Для этого пользователя не заведён пароль. Обратитесь к админу.",
+                    "Для этого пользователя нет пароля. Обратитесь к администратору.",
                     reply_markup=UNAUTHORIZED_KEYBOARD
                 )
                 return ConversationHandler.END
 
-            # 3. Сравниваем введённый пароль с хэшом в auth_user.password_hash
-            #    Если в базе действительно хэш (pbkdf2_sha256$...), используем check_password:
             if check_password(raw_password, auth_user.password_hash):
-                # Успех
                 AUTHORIZED_USERS.add(tg_id)
                 user_obj.telegram_id = tg_id
                 await save_user(user_obj)
+
+                await log_to_linked(
+                    tg_id,
+                    getattr(user_obj, "iin", ""),
+                    getattr(user_obj, "t_number", "")
+                )
 
                 await update.message.reply_text(
                     "Авторизация успешна! Теперь доступны все команды.",
@@ -120,64 +127,166 @@ class Command(BaseCommand):
                 )
             else:
                 await update.message.reply_text(
-                    "Неверный пароль. Повторите /login.",
+                    "Неверный пароль. Нажмите 'Авторизация', чтобы попробовать снова.",
                     reply_markup=UNAUTHORIZED_KEYBOARD
                 )
-
             return ConversationHandler.END
 
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler("login", login_command)],
+        auth_conv_handler = ConversationHandler(
+            entry_points=[MessageHandler(filters.Regex("^Авторизация$"), start_auth)],
             states={
-                WAITING_USERNAME: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, username_input)
-                ],
-                WAITING_PASSWORD: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, password_input)
-                ],
+                WAITING_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, username_input)],
+                WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, password_input)],
             },
             fallbacks=[]
         )
 
-        async def ensure_authorized(update: Update):
+        # ---------- ConversationHandler для "Отпуск" ----------
+        async def start_vacation(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tg_id = update.effective_user.id
             if tg_id not in AUTHORIZED_USERS:
                 await update.message.reply_text(
-                    "Сначала авторизуйтесь: /login",
+                    "Сначала авторизуйтесь (нажмите 'Авторизация').",
                     reply_markup=UNAUTHORIZED_KEYBOARD
                 )
-                return False
-            return True
+                return ConversationHandler.END
 
-        async def bind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if not await ensure_authorized(update):
-                return
-            if not context.args:
-                await update.message.reply_text("Использование: /bind <username>")
-                return
-            await update.message.reply_text("Bind выполнен (заглушка).")
+            # Находим пользователя
+            user_obj = await find_user_by_telegram_id(tg_id)
+            # Проверяем, что хотя бы одно из полей ФИО заполнено
+            if not user_obj or (not user_obj.name and not user_obj.first_name):
+                await update.message.reply_text("Ваше ФИО не заполнено в БД. Обратитесь к администратору.")
+                return ConversationHandler.END
 
-        async def vacation_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if not await ensure_authorized(update):
-                return
-            await update.message.reply_text("Ваш отпуск: ... (заглушка).")
+            # Формируем сокращённое ФИО, используя новые функции (например, "ИвановИ")
+            short_fio = make_short_name_no_dots_for_user(user_obj)
+            context.user_data["short_fio"] = short_fio
+            # Сохраняем объект пользователя для последующего использования
+            context.user_data["user_obj"] = user_obj
 
-        async def salary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if not await ensure_authorized(update):
-                return
-            await update.message.reply_text("Ваша зарплата: ... (заглушка).")
+            await update.message.reply_text("Введите вашу должность:")
+            return WAITING_JOB
 
-        async def list_docs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if not await ensure_authorized(update):
-                return
-            await update.message.reply_text("Список файлов: ... (заглушка).")
+        async def vacation_job_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            job = update.message.text.strip()
+            user_obj = context.user_data.get("user_obj")
+            if not user_obj:
+                await update.message.reply_text("Ошибка: пользователь не найден в контексте.", reply_markup=AUTHORIZED_KEYBOARD)
+                return ConversationHandler.END
 
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(CommandHandler("help", help_command))
-        app.add_handler(conv_handler)
-        app.add_handler(CommandHandler("bind", bind_command))
-        app.add_handler(CommandHandler("vacation", vacation_command))
-        app.add_handler(CommandHandler("salary", salary_command))
-        app.add_handler(CommandHandler("list_docs", list_docs_command))
+            vac_data = await get_vacation_async(user_obj, job)
+            if not vac_data:
+                await update.message.reply_text("Не найдено в графике отпусков.", reply_markup=AUTHORIZED_KEYBOARD)
+            else:
+                # Вычисляем сокращённое ФИО для вывода
+                short_fio = make_short_name_no_dots_for_user(user_obj)
+                msg = (
+                    f"ФИО (сокр.): {short_fio}\n"
+                    f"Должность: {job}\n"
+                    f"Кол. дней: {vac_data['days']}\n"
+                    f"Согласованные дни: {vac_data['agreed']}\n"
+                    f"Перенесение: {vac_data['transfer']}\n"
+                    f"Примечание: {vac_data['note']}"
+                )
+                await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+
+            return ConversationHandler.END
+
+        vacation_conv_handler = ConversationHandler(
+            entry_points=[MessageHandler(filters.Regex("^Отпуск$"), start_vacation)],
+            states={
+                WAITING_JOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, vacation_job_input)]
+            },
+            fallbacks=[]
+        )
+
+        # ---------- Общий обработчик текстов ----------
+        async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            text = update.message.text
+            tg_id = update.effective_user.id
+
+            if tg_id not in AUTHORIZED_USERS:
+                if text == "Помощь":
+                    await update.message.reply_text(
+                        "Вы можете:\n- 'Авторизация' для входа\n- 'Помощь' для этого сообщения",
+                        reply_markup=UNAUTHORIZED_KEYBOARD
+                    )
+                else:
+                    await update.message.reply_text(
+                        "Сначала авторизуйтесь (нажмите 'Авторизация').",
+                        reply_markup=UNAUTHORIZED_KEYBOARD
+                    )
+            else:
+                # Авторизован
+                if text == "Помощь":
+                    await update.message.reply_text(
+                        "Доступные команды:\n"
+                        "- Помощь\n"
+                        "- Привязать\n"
+                        "- Отпуск\n"
+                        "- Зарплата\n"
+                        "- Документы",
+                        reply_markup=AUTHORIZED_KEYBOARD
+                    )
+                elif text == "Привязать":
+                    await update.message.reply_text("Привязка не реализована.", reply_markup=AUTHORIZED_KEYBOARD)
+                elif text == "Зарплата":
+                    user_obj = await find_user_by_telegram_id(tg_id)
+                    if not user_obj:
+                        await update.message.reply_text(
+                            "Не найден пользователь в БД. Обратитесь к администратору.",
+                            reply_markup=AUTHORIZED_KEYBOARD
+                        )
+                    else:
+                        if not user_obj.iin:
+                            await update.message.reply_text(
+                                "У вас не заполнен ИИН в БД. Обратитесь к администратору.",
+                                reply_markup=AUTHORIZED_KEYBOARD
+                            )
+                        else:
+                            result = await get_salary_async(user_obj.iin)
+                            if not result:
+                                await update.message.reply_text(
+                                    "Ваш ИИН не найден в таблице зарплат.",
+                                    reply_markup=AUTHORIZED_KEYBOARD
+                                )
+                            else:
+                                fio, salary = result
+                                msg = (f"По вашему ИИН: {user_obj.iin}\n"
+                                       f"ФИО: {fio}\n"
+                                       f"Зарплата: {salary}")
+                                await update.message.reply_text(
+                                    msg,
+                                    reply_markup=AUTHORIZED_KEYBOARD
+                                )
+                elif text == "Документы":
+                    files = get_drive_files_with_links(page_size=10)
+                    if not files:
+                        await update.message.reply_text("Нет доступных файлов.", reply_markup=AUTHORIZED_KEYBOARD)
+                    else:
+                        doc_text = "Список доступных файлов:\n"
+                        for f in files:
+                            link = f["file_link"]
+                            name = f["name"]
+                            if link:
+                                doc_text += f"- [{name}]({link})\n"
+                            else:
+                                doc_text += f"- {name} (нет ссылки)\n"
+
+                        await update.message.reply_text(
+                            doc_text,
+                            parse_mode="Markdown",
+                            reply_markup=AUTHORIZED_KEYBOARD
+                        )
+                else:
+                    await update.message.reply_text(
+                        "Неизвестная команда. Нажмите 'Помощь'.",
+                        reply_markup=AUTHORIZED_KEYBOARD
+                    )
+
+        # Регистрируем ConversationHandlers и text_handler
+        app.add_handler(auth_conv_handler)
+        app.add_handler(vacation_conv_handler)
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
         app.run_polling()

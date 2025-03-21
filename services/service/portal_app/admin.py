@@ -9,6 +9,8 @@ class UserAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'first_name', 'iin', 'isadmin', 'created_at')
     search_fields = ('name', 'first_name', 'iin')
     list_filter = ('isadmin',)
+    readonly_fields = ("telegram_id",)
+
 
 @admin.register(Linked)
 class LinkedAdmin(admin.ModelAdmin):

@@ -3,7 +3,7 @@ from django.db import models
 class User(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    telegram_id = models.BigIntegerField(null=True, blank=True)
+    telegram_id = models.BigIntegerField(null=True, blank=True, editable=False)
     first_name = models.CharField(max_length=100, blank=True)
     name = models.CharField(max_length=100, blank=True)
     iin = models.CharField(max_length=12, blank=True)      # ИИН обычно 12 символов
@@ -28,7 +28,8 @@ class Linked(models.Model):
     t_number = models.CharField(max_length=50, blank=True)
     
     class Meta:
-        db_table = 'linked' 
+        db_table = 'linked'
+        managed = False
 
     def __str__(self):
         return f"Linked {self.id} (tg_id={self.telegram_id}, t_number={self.t_number})"
