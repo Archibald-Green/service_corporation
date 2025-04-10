@@ -1,32 +1,30 @@
-# portal_app/forms.py
 from django import forms
 from django.contrib.auth.hashers import make_password
 from .models import AuthUser
 
 class AuthUserForm(forms.ModelForm):
     """
-    Форма, где админ вводит сырой пароль в поле password_raw.
-    user - это ForeignKey на User (dropdown).
+    Форма для изменения пароля: админ вводит сырой пароль в поле password_raw.
+    Поле password_hash заполняется автоматически при сохранении.
     """
     password_raw = forms.CharField(
         label="Пароль",
-        required=False,
+        required=True,
         widget=forms.PasswordInput,
         help_text="Введите сырой пароль, который будет захеширован."
     )
 
     class Meta:
         model = AuthUser
-        # вместо 'user_id' используем 'user'
-        fields = ['user', 'password_hash', 'password_raw']
-        # можно убрать password_hash из fields, если хотим скрыть хэш
+        # Используем только поля user и password_raw
+        fields = ['user', 'password_raw']
 
-    def clean(self):
-        cleaned_data = super().clean()
-        raw_pass = cleaned_data.get('password_raw')
-        print("DEBUG: raw_pass =", raw_pass)  # << отладка
-        if raw_pass:
-            hashed = make_password(raw_pass)
-            print("DEBUG: hashed =", hashed)  # << отладка
-            cleaned_data['password_hash'] = hashed
-        return cleaned_data
+    def save(self, commit=True):
+        # Получаем экземпляр модели без сохранения в базу
+        instance = super().save(commit=False)
+        raw_pass = self.cleaned_data.get('password_raw')
+        # Хэшируем введённый сырой пароль и сохраняем его в поле password_hash
+        instance.password_hash = make_password(raw_pass)
+        if commit:
+            instance.save()
+        return instance

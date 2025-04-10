@@ -51,3 +51,48 @@ class AuthUser(models.Model):
         managed = True
 
 
+class Department(models.Model):
+    name = models.CharField(max_length=100, unique=True, help_text="Название отдела")
+    description = models.TextField(blank=True, null=True, help_text="Описание отдела (необязательно)")
+    folder_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="ID папки Google Drive, где хранятся документы для данного отдела"
+    )
+
+    class Meta:
+        db_table = 'departments'
+
+    def __str__(self):
+        return self.name
+
+class UserDepartmentMapping(models.Model):
+    """
+    Таблица для связи пользователя с отделом.
+    Каждый пользователь (User) имеет один профиль отдела,
+    а отдел (Department) может быть назначен нескольким пользователям.
+    В данном случае выбрана связь один к одному, чтобы для каждого пользователя
+    была установлена только одна запись о принадлежности к отделу.
+    """
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name='department_mapping'
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Отдел, в котором работает пользователь"
+    )
+
+    class Meta:
+        db_table = 'user_department_mappings'
+
+    def __str__(self):
+        dep = self.department.name if self.department else "Не определён"
+        return f"Пользователь {self.user} (Отдел: {dep})"
+

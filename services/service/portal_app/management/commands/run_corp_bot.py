@@ -7,12 +7,11 @@ from telegram.ext import (
 )
 from telegram import Update, ReplyKeyboardMarkup
 from asgiref.sync import sync_to_async
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import check_password, make_password
 
 from portal_app.models import User, AuthUser, Linked
 from portal_app.creds.cred import botTOKEN
-from urllib.parse import quote_plus  
-
+from urllib.parse import quote_plus
 
 # Импорт функций из google_service.py
 from .google_service import (
@@ -22,10 +21,11 @@ from .google_service import (
     get_vacation_by_user_and_job,
     get_payroll_by_user_from_google_sheet,
     format_payroll,
-    save_payroll_to_pdf
+    save_payroll_to_pdf,
+    get_drive_files_by_folder
 )
 
-# Состояния диалогов
+# Состояния диалогов для обычных функций
 WAITING_USERNAME = 1
 WAITING_PASSWORD = 2
 WAITING_JOB = 50
@@ -33,13 +33,19 @@ WAITING_LANGUAGE = 100
 WAITING_PAYROLL_MONTH = 110
 WAITING_PDF_CONFIRM = 120
 
+# Состояния для админского диалога
+ADMIN_MENU = 200
+ADMIN_CHANGE_PASS_USERNAME = 210
+ADMIN_CHANGE_PASS_NEW = 220
+ADMIN_BROADCAST_MESSAGE = 230
+
 AUTHORIZED_USERS = set()
 
 # Клавиатуры
 AUTHORIZED_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["Помощь", "Отпуск", "Расчетный лист", "Язык"],
-        ["Зарплата", "Документы"]
+        ["Зарплата", "Документы", "Контакты", "Админка"]
     ],
     resize_keyboard=True
 )
@@ -49,6 +55,17 @@ UNAUTHORIZED_KEYBOARD = ReplyKeyboardMarkup(
 )
 PDF_KEYBOARD = ReplyKeyboardMarkup([["Сохранить PDF", "Назад"]], resize_keyboard=True)
 
+@sync_to_async
+def get_user_department_folder(tg_id: int) -> str:
+    """
+    Возвращает folder_id из связанного отдела (из модели UserDepartmentMapping)
+    для пользователя с заданным telegram_id.
+    """
+    user = User.objects.filter(telegram_id=tg_id).first()
+    if user and hasattr(user, 'department_mapping') and user.department_mapping.department:
+        # Предполагается, что в модели Department есть поле folder_id, настроенное через админку
+        return user.department_mapping.department.folder_id
+    return None
 # Обёртки для работы с базой
 @sync_to_async
 def find_user_by_name(name: str) -> User | None:
@@ -85,29 +102,30 @@ def get_vacation_async(user_obj, job: str):
 # Обёртка для поиска расчетного листа из Google Sheets
 async_get_payroll_by_user = sync_to_async(get_payroll_by_user_from_google_sheet)
 
-# Асинхронная функция для вызова веб‑приложения Google Apps Script,
-# которая возвращает URL созданного PDF‑файла (расчетного листа)     url = f"https://script.google.com/macros/s/AKfycbwC9Fh_4tl5XrPP4dfAvI5jCboEADwAhUuRedkP4deQW4QSdkP6QdXFDzjfusMJxvbQKw/exec"
+CONTACTS_TEXT = (
+    "\n📞 Контакты отдела:\n\n"
+    "• Оператор: 101\n"
+    "• Бухгалтерия: 102\n"
+    "• Отдел кадров: 103\n"
+    "• Охрана: 104\n"
+    "• Директор: 105"
+)
 
-
+# Асинхронная функция для вызова Google Apps Script,
+# возвращающая URL PDF-файла (расчетного листа)
 async def request_payroll_pdf(iin: str, month: str) -> str:
-    from urllib.parse import quote_plus
-
     iin_encoded = quote_plus(iin)
     month_encoded = quote_plus(month)
-
     url = f"https://script.google.com/macros/s/AKfycbwC9Fh_4tl5XrPP4dfAvI5jCboEADwAhUuRedkP4deQW4QSdkP6QdXFDzjfusMJxvbQKw/exec?iin={iin_encoded}&month={month_encoded}"
-    
     print(f"[DEBUG] Отправляем запрос к: {url}")
-
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status != 200:
                 print(f"[ERROR] Google Script вернул статус {response.status}")
                 return None
             text = await response.text()
-            print(f"[DEBUG] Ответ от скрипта: {text[:300]}...")  # выводим только первые 300 символов
+            print(f"[DEBUG] Ответ от скрипта: {text[:300]}...")
             return text.strip()
-
 
 def format_payroll_text(payroll: dict) -> str:
     return (
@@ -126,10 +144,164 @@ def format_payroll_text(payroll: dict) -> str:
     )
 
 ###############################################################################
+# Админпанель: меню и функции
+###############################################################################
+# Импорт формы для изменения пароля
+from portal_app.forms import AuthUserForm
+
+@sync_to_async
+def update_auth_user_with_form(auth_user, data: dict) -> tuple[bool, dict]:
+    form = AuthUserForm(data=data, instance=auth_user)
+    if form.is_valid():
+        form.save()
+        return True, {}
+    else:
+        return False, form.errors
+
+# Функция для получения списка всех пользователей
+@sync_to_async
+def get_all_users() -> str:
+    users = User.objects.all()
+    if not users:
+        return "Нет пользователей."
+    result = "Список пользователей:\n"
+    for user in users:
+        result += f"{user.id}. {user.name} {user.first_name} (Telegram: {user.telegram_id}, Админ: {user.isadmin})\n"
+    return result
+
+# Функция для получения логов (здесь для примера статичный ответ)
+def get_latest_logs() -> str:
+    return ("Логи:\n"
+            "- Авторизация: 10 записей\n"
+            "- Ошибки: 2 записи\n"
+            "- Действия: 5 записей\n")
+
+# Админская панель: стартовое меню
+async def start_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tg_id = update.effective_user.id
+    user_obj = await find_user_by_telegram_id(tg_id)
+    lang = context.user_data.get("lang", "ru")
+    if not user_obj or not user_obj.isadmin:
+        msg = "У вас нет прав администратора." if lang == "ru" else "Сізде әкімшілік құқықтар жоқ."
+        await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+        return ConversationHandler.END
+    admin_keyboard = ReplyKeyboardMarkup(
+        [
+            ["Сменить пароль", "Просмотреть пользователей"],
+            ["Просмотреть логи", "Рассылка"],
+            ["Выход"]
+        ],
+        resize_keyboard=True
+    )
+    msg = "Выберите действие:" if lang == "ru" else "Іс-әрекетті таңдаңыз:"
+    await update.message.reply_text(msg, reply_markup=admin_keyboard)
+    return ADMIN_MENU
+
+# Обработчик выбора действия в админском меню
+async def admin_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = update.message.text.strip()
+    lang = context.user_data.get("lang", "ru")
+    if choice == "Сменить пароль":
+        await update.message.reply_text(
+            "Введите имя пользователя, чей пароль вы хотите изменить:",
+            reply_markup=AUTHORIZED_KEYBOARD
+        )
+        return ADMIN_CHANGE_PASS_USERNAME
+    elif choice == "Просмотреть пользователей":
+        users_list = await get_all_users()
+        await update.message.reply_text(users_list, reply_markup=AUTHORIZED_KEYBOARD)
+        # После показа возвращаем в меню
+        return await start_admin_panel(update, context)
+    elif choice == "Просмотреть логи":
+        # Для примера используем статичные логи
+        logs = get_latest_logs()
+        await update.message.reply_text(logs, reply_markup=AUTHORIZED_KEYBOARD)
+        return await start_admin_panel(update, context)
+    elif choice == "Рассылка":
+        await update.message.reply_text(
+            "Введите сообщение для рассылки всем авторизованным пользователям:",
+            reply_markup=AUTHORIZED_KEYBOARD
+        )
+        return ADMIN_BROADCAST_MESSAGE
+    elif choice == "Выход":
+        await update.message.reply_text("Выход из админпанели.", reply_markup=AUTHORIZED_KEYBOARD)
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("Неизвестная команда. Попробуйте еще раз.", reply_markup=AUTHORIZED_KEYBOARD)
+        return ADMIN_MENU
+
+# Диалог смены пароля
+async def admin_change_pass_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_username = update.message.text.strip()
+    lang = context.user_data.get("lang", "ru")
+    target_user = await find_user_by_name(target_username)
+    if not target_user:
+        msg = "Пользователь не найден." if lang == "ru" else "Пайдаланушы табылмады."
+        await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+        return ConversationHandler.END
+    context.user_data["target_user"] = target_user
+    msg = f"Введите новый пароль для пользователя {target_username}:" if lang == "ru" else f"{target_username} үшін жаңа құпия сөзді енгізіңіз:"
+    await update.message.reply_text(msg)
+    return ADMIN_CHANGE_PASS_NEW
+
+async def admin_change_pass_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_password = update.message.text.strip()
+    lang = context.user_data.get("lang", "ru")
+    target_user = context.user_data.get("target_user")
+    if not target_user:
+        msg = "Ошибка: целевой пользователь не найден." if lang == "ru" else "Қате: мақсатты пайдаланушы табылмады."
+        await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+        return ConversationHandler.END
+    auth_user = await find_auth_user_by_user(target_user)
+    if not auth_user:
+        msg = "У данного пользователя не установлен пароль." if lang == "ru" else "Осы пайдаланушы үшін құпия сөз орнатылмаған."
+        await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+        return ConversationHandler.END
+    data = {'user': target_user.id, 'password_raw': new_password}
+    success, errors = await update_auth_user_with_form(auth_user, data)
+    if success:
+        msg = f"Пароль для пользователя {target_user.name or target_user.first_name} успешно изменён." if lang == "ru" else f"{target_user.name or target_user.first_name} үшін құпия сөз сәтті өзгертілді."
+        await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+    else:
+        msg = f"Ошибка при изменении пароля: {errors}" if lang == "ru" else f"Құпия сөзді өзгерту кезінде қате: {errors}"
+        await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+    return await start_admin_panel(update, context)
+
+# Диалог рассылки
+async def admin_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    broadcast_text = update.message.text.strip()
+    lang = context.user_data.get("lang", "ru")
+    if not broadcast_text:
+        msg = "Сообщение пустое. Попробуйте еще раз." if lang == "ru" else "Хабарлама бос. Қайтадан көріңіз."
+        await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+        return ADMIN_BROADCAST_MESSAGE
+    # Рассылка всем авторизованным пользователям
+    for user_id in AUTHORIZED_USERS:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=f"Рассылка:\n{broadcast_text}")
+        except Exception as e:
+            print(f"[ERROR] При отправке сообщения пользователю {user_id}: {e}")
+    msg = "Сообщение отправлено всем авторизованным пользователям." if lang == "ru" else "Хабарлама барлық жүйеге кірген пайдаланушыларға жіберілді."
+    await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
+    return await start_admin_panel(update, context)
+
+# Админский ConversationHandler
+admin_panel_conv_handler = ConversationHandler(
+    entry_points=[MessageHandler(filters.Regex("^Админка$"), start_admin_panel)],
+    states={
+        ADMIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_menu_choice)],
+        ADMIN_CHANGE_PASS_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_change_pass_username)],
+        ADMIN_CHANGE_PASS_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_change_pass_new)],
+        ADMIN_BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_broadcast_message)]
+    },
+    fallbacks=[MessageHandler(filters.Regex("^Выход$"), lambda update, context: ConversationHandler.END)]
+)
+
+###############################################################################
 # Основной код бота
 ###############################################################################
 class Command(BaseCommand):
-    help = "Bot with payroll lookup and PDF generation (Russian/Kazakh)."
+    help = "Bot with payroll lookup, PDF generation and admin panel (Russian/Kazakh)."
 
     def handle(self, *args, **options):
         BOT_TOKEN = botTOKEN
@@ -326,32 +498,23 @@ class Command(BaseCommand):
         async def pdf_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lang = context.user_data.get("lang", "ru")
             tg_id = update.effective_user.id
-
-            # Получаем пользователя из context или по Telegram ID
             user_obj = context.user_data.get("user_obj")
             if not user_obj:
                 user_obj = await find_user_by_telegram_id(tg_id)
-                context.user_data["user_obj"] = user_obj  # чтобы не терять снова
-
+                context.user_data["user_obj"] = user_obj
             selected_month = context.user_data.get("selectedMonth") or context.user_data.get("selected_payroll", {}).get("Месяц")
-
-            # Вывод отладочной информации
             await update.message.reply_text(
                 f"DEBUG: user_obj.iin = {getattr(user_obj, 'iin', None)} / selectedMonth = {selected_month}"
             )
-
             if not user_obj or not user_obj.iin or not selected_month:
                 await update.message.reply_text(
                     "Ошибка: недостаточно данных. Пожалуйста, повторно авторизуйтесь или выберите расчётный лист.",
                     reply_markup=AUTHORIZED_KEYBOARD
                 )
                 return ConversationHandler.END
-
-            # Отладочное сообщение с параметрами
             await update.message.reply_text(
                 f"Отправляем запрос с ИИН: {user_obj.iin} и месяцем: {selected_month}"
             )
-
             text = update.message.text.strip().lower()
             if text == "сохранить pdf":
                 pdf_url = await request_payroll_pdf(user_obj.iin, selected_month)
@@ -413,9 +576,9 @@ class Command(BaseCommand):
                     await update.message.reply_text(resp, reply_markup=UNAUTHORIZED_KEYBOARD)
             else:
                 if text == "Помощь":
-                    resp = ("Доступные команды:\n- Помощь\n- Отпуск\n- Расчетный лист\n- Зарплата\n- Документы"
+                    resp = ("Доступные команды:\n- Помощь\n- Отпуск\n- Расчетный лист\n- Зарплата\n- Документы\n- Админка"
                             if lang == "ru" else
-                            "Қол жетімді командалар:\n- Помощь\n- Отпуск\n- Расчетный лист\n- Зарплата\n- Документы")
+                            "Қол жетімді командалар:\n- Помощь\n- Отпуск\n- Расчетный лист\n- Зарплата\n- Документы\n- Админка")
                     await update.message.reply_text(resp, reply_markup=AUTHORIZED_KEYBOARD)
                 elif text == "Зарплата":
                     user_obj = await find_user_by_telegram_id(tg_id)
@@ -443,35 +606,47 @@ class Command(BaseCommand):
                                    f"Сіздің ИИН: {user_obj.iin}\nФИО: {fio}\nЖалақы: {salary}")
                             await update.message.reply_text(msg, reply_markup=AUTHORIZED_KEYBOARD)
                 elif text == "Документы":
-                    files = get_drive_files_with_links(10)
-                    if not files:
-                        resp = ("Нет доступных файлов." if lang == "ru" else "Қолжетімді файлдар жоқ.")
-                        await update.message.reply_text(resp, reply_markup=AUTHORIZED_KEYBOARD)
+                    # Получаем folder_id для отдела пользователя
+                    department_folder_id = await get_user_department_folder(tg_id)
+                    if not department_folder_id:
+                        await update.message.reply_text(
+                            "Ваш отдел не определён или папка не назначена. Обратитесь к администратору.",
+                            reply_markup=AUTHORIZED_KEYBOARD
+                        )
                     else:
-                        doc_text = "Список доступных файлов:\n" if lang == "ru" else "Қолжетімді файлдар тізімі:\n"
-                        for f in files:
-                            link = f["file_link"]
-                            name = f["name"]
-                            if link:
-                                doc_text += f"- [{name}]({link})\n"
-                            else:
-                                doc_text += f"- {name} (нет ссылки)\n"
-                        await update.message.reply_text(doc_text, parse_mode="Markdown", reply_markup=AUTHORIZED_KEYBOARD)
+                        files = get_drive_files_by_folder(page_size=10, folder_id=department_folder_id)
+                        if not files:
+                            await update.message.reply_text(
+                                "Нет доступных файлов для вашего отдела.",
+                                reply_markup=AUTHORIZED_KEYBOARD
+                            )
+                        else:
+                            doc_text = "Список доступных файлов:\n"
+                            for f in files:
+                                link = f.get("file_link")
+                                name = f.get("name")
+                                doc_text += f"- [{name}]({link})\n" if link else f"- {name} (нет ссылки)\n"
+                            await update.message.reply_text(doc_text, parse_mode="Markdown", reply_markup=AUTHORIZED_KEYBOARD)
                 elif text == "Отпуск":
                     await start_vacation(update, context)
                 elif text == "Расчетный лист":
                     return await start_payroll(update, context)
+                elif text == "Контакты":
+                     await update.message.reply_text(CONTACTS_TEXT, reply_markup=AUTHORIZED_KEYBOARD)
+                elif text == "Админка":
+                    return await start_admin_panel(update, context)
                 else:
                     resp = ("Неизвестная команда. Нажмите 'Помощь'."
                             if lang == "ru" else "Белгісіз команда. 'Помощь' батырмасын басыңыз.")
                     await update.message.reply_text(resp, reply_markup=AUTHORIZED_KEYBOARD)
             return ConversationHandler.END
 
-        # Регистрируем ConversationHandlers и основной обработчик
+        # Регистрируем все ConversationHandler'ы и основной обработчик
         app.add_handler(language_conv_handler)
         app.add_handler(auth_conv_handler)
         app.add_handler(vacation_conv_handler)
         app.add_handler(payroll_conv_handler)
+        app.add_handler(admin_panel_conv_handler)
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
         app.run_polling()

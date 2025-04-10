@@ -1,8 +1,7 @@
 from django.contrib import admin
 
-from .models import User, Linked, AuthUser
+from .models import User, Linked, AuthUser, Department, UserDepartmentMapping
 from .forms import AuthUserForm
-
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
@@ -33,3 +32,13 @@ class AuthUserAdmin(admin.ModelAdmin):
         if new_hash:
             obj.password_hash = new_hash
         super().save_model(request, obj, form, change)
+        
+@admin.register(Department)
+class DepartmentAdmin(admin.ModelAdmin):
+    list_display = ('name', 'folder_id', 'description')
+    search_fields = ('name', 'folder_id')
+
+@admin.register(UserDepartmentMapping)
+class UserDepartmentMappingAdmin(admin.ModelAdmin):
+    list_display = ('user', 'department')
+    search_fields = ('user__name', 'department__name')
