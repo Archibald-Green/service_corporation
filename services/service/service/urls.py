@@ -17,9 +17,20 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from django.shortcuts import redirect
+from rest_framework.routers import DefaultRouter
+from meter_app.api.views import ErcDataViewSet, ReadingsSuViewSet
+from django.urls import path, include
 
 
 urlpatterns = [
+    # при заходе на / перенаправляем в админку
     path('', lambda request: redirect('/admin/', permanent=False)),
+
     path('admin/', admin.site.urls),
+
+    # ваши API-эндпоинты
+    path('api/', include('meter_app.api.urls')),
+
+    # всё из bots_app/urls.py (в том числе /whatsapp/webhook/)
+    path('', include('bots_app.urls')),
 ]

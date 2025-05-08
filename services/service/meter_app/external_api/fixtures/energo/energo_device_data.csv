@@ -1,0 +1,2 @@
+id,value,value_error,rvalue_id,c,ctime,datetime,type_arch_orig,type_arch,success,error_arch,created_at,device_id
+1,123.456,0.0,1,0,2025-04-22T10:00:00Z,2025-04-22T09:59:00Z,1,1,True,,2025-04-23T16:05:09.368688,5001

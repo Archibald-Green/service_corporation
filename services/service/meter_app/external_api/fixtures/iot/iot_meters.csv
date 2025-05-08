@@ -1,0 +1,2 @@
+id,modem_id,port,serial_number,consumer,account_id,last_reading,created_at
+1,301,3,IOTSN001,ConsumerA,ACC002,78.91,2025-04-23T16:05:09.369649

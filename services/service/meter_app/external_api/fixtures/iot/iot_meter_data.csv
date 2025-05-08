@@ -1,0 +1,2 @@
+id,dt,type_of_data,rssi,snr,num_of_pulse,reading,data,battery_level,start_reading,diff_reading,created_at,meter_id
+1,2025-04-22T10:05:00Z,pulse,-70,7.5,120,45.678,"{""raw"": ""0x1A2B""}",3.7,40.0,5.678,2025-04-23T16:05:09.370390,1

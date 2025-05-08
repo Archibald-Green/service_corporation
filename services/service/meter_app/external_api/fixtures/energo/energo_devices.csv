@@ -1,0 +1,2 @@
+id,ctime,dmodel_id,dmodel_sensor,serial_num,device_id,folder_id,location,physical_person,owner_name,beg_value,phones,sector_id,mount_id,mount,archives,alias,enable,resource_id,resource_inx,scheme_id,dscan,calc,account,date_next,date_verification,c,dpu,position_vertical,owner_device,created_at
+1,2025-04-22T10:00:00Z,101,SensorA,SN12345,5001,100,Building 1,True,Company A,0.0,87001234567,1,1,Wall,0,AliasA,True,200,1,10,ScanA,CalcA,ACC001,2025-05-01,2025-04-01,0,DPU1,Vertical1,OwnerDev1,2025-04-23T16:05:09.366244

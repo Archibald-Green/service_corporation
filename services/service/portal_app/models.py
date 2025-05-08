@@ -14,8 +14,8 @@ class User(models.Model):
     phone        = models.CharField(max_length=20, blank=True)
     
     class Meta:
-        db_table = "portal.users"
-        managed = False
+        db_table = '"portal"."users"'
+        managed = True
 
     def __str__(self):
         return f"{self.name or ''} {self.first_name or ''} (ID={self.id})"
@@ -28,8 +28,8 @@ class Linked(models.Model):
     t_number    = models.CharField(max_length=50, blank=True)
     
     class Meta:
-        db_table = "portal.linked"
-        managed = False
+        db_table = '"portal"."linked"'
+        managed = True
 
     def __str__(self):
         return f"Linked {self.id} (tg_id={self.telegram_id}, t_number={self.t_number})"
@@ -46,8 +46,8 @@ class AuthUser(models.Model):
     password_hash = models.CharField(max_length=128)
 
     class Meta:
-        db_table = "portal.auth_users"
-        managed  = False
+        db_table = '"portal"."auth_users"'
+        managed = True
 
     def __str__(self):
         return f"AuthUser for User ID={self.user_id}"
@@ -72,8 +72,8 @@ class Department(models.Model):
                  )
 
     class Meta:
-        db_table = "portal.departments"
-        managed  = False
+        db_table = '"portal"."departments"'
+        managed = True
 
     def __str__(self):
         return self.name
@@ -98,8 +98,8 @@ class UserDepartmentMapping(models.Model):
                  )
 
     class Meta:
-        db_table = "portal.user_department_mappings"
-        managed  = False
+        db_table = '"portal"."user_department_mappings"'
+        managed = True
 
     def __str__(self):
         dep = self.department.name if self.department else "Не определён"

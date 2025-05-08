@@ -1,4 +1,6 @@
 from django.db import models
+from django.contrib.postgres.fields import JSONField
+
 
 
 class Role(models.Model):
@@ -20,7 +22,7 @@ class Role(models.Model):
 #
 # 2) portal.users
 #
-class User(models.Model):
+class User_meter(models.Model):
     id = models.AutoField(primary_key=True)
     username = models.CharField("Логин", max_length=255)
     email = models.CharField("Email", max_length=255)
@@ -29,7 +31,7 @@ class User(models.Model):
     updated_at = models.DateTimeField("Обновлено", auto_now=True)
 
     class Meta:
-        db_table = '"portal"."users"'
+        db_table = '"portal"."meter_users"'
         managed = True
         verbose_name = "Пользователь"
         verbose_name_plural = "Пользователи"
@@ -44,7 +46,7 @@ class User(models.Model):
 #
 class UserRoles(models.Model):
     user = models.ForeignKey(
-        User,
+        User_meter,
         on_delete=models.CASCADE,
         db_column="user_id",
         related_name="role_links",
@@ -408,6 +410,7 @@ class ErcData1(models.Model):
 
     def __str__(self):
         return f"{self.abonent} / {self.entity}"
+    
 class MeterUser(models.Model):
     id               = models.AutoField(primary_key=True)
     isactual         = models.BooleanField(verbose_name='Is Actual')
@@ -748,3 +751,139 @@ class YourTableName(models.Model):
 
     def __str__(self):
         return f"{self.name} – {self.contract_num}"
+    
+    
+class Incorrect(models.Model):
+    abonent_id   = models.IntegerField("Абонент",    blank=True, null=True)
+    account_id   = models.IntegerField("ЛС",         blank=True, null=True)
+    point_num    = models.IntegerField("Точка учёта",blank=True, null=True)
+    rdate        = models.DateField   ("Дата снятия",blank=True, null=True)
+    rvalue       = models.DecimalField("Показание", max_digits=12, decimal_places=3, blank=True, null=True)
+    meter_id     = models.IntegerField("Код прибора",blank=True, null=True)
+    error_reason = models.TextField   ("Причина ошибки")
+    created_at   = models.DateTimeField("Время записи", auto_now_add=True)
+
+    class Meta:
+        db_table = '"public"."incorrect"'
+        verbose_name = "Ошибочная запись"
+        verbose_name_plural = "Ошибочные записи"
+
+    def __str__(self):
+        return f"{self.abonent_id}/{self.account_id}: {self.error_reason[:30]}"
+
+class ReadingsSU(models.Model):
+    abonent_id = models.IntegerField(verbose_name="Abonent ID")
+    account_id = models.IntegerField(verbose_name="Account ID")
+    point_num  = models.IntegerField(verbose_name="PointNum")
+    rdate      = models.DateField(verbose_name="RDate")
+    rvalue     = models.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        verbose_name="RValue"
+    )
+    meter_id   = models.IntegerField(verbose_name="Meter ID")
+
+    class Meta:
+        db_table = '"public"."readings_su"'
+        verbose_name = 'Readings_SU'
+        verbose_name_plural = 'Readings_SU'
+        
+        
+class WhatsAppSession(models.Model):
+    phone     = models.CharField(max_length=32, unique=True)
+    state     = models.CharField(max_length=32)
+    data = models.JSONField()
+    updated   = models.DateTimeField(auto_now=True)
+
+    def clear(self):
+        self.state = ""
+        self.data = {}
+
+
+
+class Area(models.Model):
+    code       = models.CharField("Код района",      max_length=50, unique=True)
+    name       = models.CharField("Название района", max_length=255)
+    created_at = models.DateTimeField("Создано",       auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлено",     auto_now=True)
+
+    class Meta:
+        db_table = '"public"."areas"'
+        verbose_name = "Район"
+        verbose_name_plural = "Районы"
+
+    def __str__(self):
+        return f"{self.code} — {self.name}"
+
+
+class UserArea(models.Model):
+    user       = models.ForeignKey(
+                    "MeterUser",
+                    on_delete=models.CASCADE,
+                    db_column="user_id",
+                    related_name="area_links",
+                    verbose_name="Абонент"
+                 )
+    area       = models.ForeignKey(
+                    Area,
+                    on_delete=models.CASCADE,
+                    db_column="area_id",
+                    related_name="user_links",
+                    verbose_name="Район"
+                 )
+    created_at = models.DateTimeField("Дата привязки", auto_now_add=True)
+
+    class Meta:
+        db_table = '"public"."user_areas"'
+        verbose_name = "Привязка абонента к району"
+        verbose_name_plural = "Привязки абонентов к районам"
+        unique_together = (("user", "area"),)
+
+    def __str__(self):
+        return f"{self.user.number} → {self.area.code}"
+
+
+class Controller(models.Model):
+    username    = models.CharField("Логин", max_length=150, unique=True)
+    password    = models.CharField("Пароль (хеш)", max_length=255)
+    area        = models.ForeignKey(
+                      Area,
+                      on_delete=models.PROTECT,
+                      related_name="controllers",
+                      verbose_name="Район"
+                  )
+    is_active   = models.BooleanField("Активен", default=True)
+    created_at  = models.DateTimeField("Создано",     auto_now_add=True)
+    updated_at  = models.DateTimeField("Обновлено",   auto_now=True)
+
+    class Meta:
+        db_table = '"public"."controllers"'
+        verbose_name = "Контроллёр"
+        verbose_name_plural = "Контроллёры"
+
+    def __str__(self):
+        return f"{self.username} ({self.area.code})"
+
+
+class Address(models.Model):
+    user        = models.OneToOneField(
+                    "MeterUser",
+                    on_delete=models.CASCADE,
+                    related_name="address",
+                    verbose_name="Абонент (MeterUser)"
+                  )
+    street      = models.CharField("Улица",       max_length=255)
+    building    = models.CharField("Дом / корпус", max_length=50)
+    apartment   = models.CharField("Кв./офис",    max_length=50, blank=True)
+    postal_code = models.CharField("Почтовый индекс", max_length=20, blank=True)
+
+    class Meta:
+        db_table = '"public"."addresses"'
+        verbose_name = "Адрес ЛС"
+        verbose_name_plural = "Адреса ЛС"
+
+    def __str__(self):
+        parts = [self.street, f"д. {self.building}"]
+        if self.apartment:
+            parts.append(f"кв. {self.apartment}")
+        return ", ".join(parts)

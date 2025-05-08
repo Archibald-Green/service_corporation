@@ -11,21 +11,27 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+import os
+import environ
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+env = environ.Env(
+    DEBUG=(bool, False),
+    # здесь можно описать остальные переменные с типами и дефолтами
+)
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
+# 3) Загружаем .env файл
+#    (файл .env должен лежать в корне проекта рядом с manage.py)
+environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-%qr73td(+xd60mk1oodktnj@%w!(ru#zpf34too#9gt+ucb4)j'
+SECRET_KEY = env('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['mytest123.loca.lt', ]
 
 
 # Application definition
@@ -39,7 +45,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'portal_app',
     'meter_app',
-    
+    'rest_framework',
+    'bots_app',
 ]
 
 MIDDLEWARE = [
@@ -77,23 +84,33 @@ WSGI_APPLICATION = 'service.wsgi.application'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'portal_db',
-        'USER': 'postgres',
-        'PASSWORD': 'admin',
-        'HOST': 'localhost',
-        'PORT': '5432',
+    "default": {
+        "ENGINE":   env("DB1_ENGINE",   default="django.db.backends.postgresql"),
+        "NAME":     env("DB1_NAME"),
+        "USER":     env("DB1_USER"),
+        "PASSWORD": env("DB1_PASSWORD"),
+        "HOST":     env("DB1_HOST"),
+        "PORT":     env("DB1_PORT"),
+        "OPTIONS":  {"options": env("DB1_OPTIONS")},
+        "TEST":     {
+            "MIRROR":       "meter",
+            "DEPENDENCIES": [],
+        },
     },
-    'meter': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'meter_db',
-        'USER': 'postgres',
-        'PASSWORD': 'admin',
-        'HOST': 'localhost',
-        'PORT': '5432',
-    }
+    "meter": {
+        "ENGINE":   env("DB2_ENGINE",   default="django.db.backends.postgresql"),
+        "NAME":     env("DB2_NAME"),
+        "USER":     env("DB2_USER"),
+        "PASSWORD": env("DB2_PASSWORD"),
+        "HOST":     env("DB2_HOST"),
+        "PORT":     env("DB2_PORT"),
+        "OPTIONS":  {"options": env("DB2_OPTIONS")},
+        "TEST":     {
+            "DEPENDENCIES": [],
+        },
+    },
 }
+
 
 
 # Password validation
@@ -137,7 +154,37 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-DATABASE_ROUTERS = [
-    'service.dbrouters.PortalRouter',
-    'service.dbrouters.MeterRouter',
-]
+# DATABASE_ROUTERS = [
+#     "service.dbrouters.PortalRouter",
+#     "service.dbrouters.MeterRouter",
+# ]
+
+DATABASE_ROUTERS = ["service.dbrouters.AppRouter"]
+
+
+CELERY_RESULT_BACKEND = "redis://localhost:6379/1"  # или ваш backend
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "UTC"  # или ваш часовой пояс
+
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES = True
+
+TWILIO_ACCOUNT_SID   = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN    = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0") 
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # если нужно, здесь же можно добавить PASSWORD, SSL и т.п.
+        },
+    }
+}
